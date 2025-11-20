@@ -12,7 +12,6 @@ export { api } from "./api";
 export { handleQuoteRequestCreated, handleQuoteRequestUpdated } from "./quoteRequests";
 export { syncUserRoles } from "./userRoles";
 export { submitContactMessage } from "./contactMessages";
-export { quickQuote } from "./quickQuote";
 export { handleSquareWebhook } from "./squareWebhook";
 export { smsInbound } from "./smsInbound";
 export { sendDueSmsReminders } from "./smsReminders";

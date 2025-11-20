@@ -30,15 +30,6 @@ type QuoteIssue = {
   errorCode?: string | null;
 };
 
-type QuickQuoteIssue = {
-  id: string;
-  passengers?: number | null;
-  pricingSource?: string | null;
-  pickupAddress?: string | null;
-  dropoffAddress?: string | null;
-  estimate?: number | null;
-};
-
 type CounterSnapshot = {
   count: number;
   date?: string | null;
@@ -91,42 +82,10 @@ const fetchQuoteIssues = async (since: admin.firestore.Timestamp) => {
     .filter((issue): issue is QuoteIssue => Boolean(issue));
 };
 
-const fetchQuickQuoteIssues = async (since: admin.firestore.Timestamp) => {
-  const snapshot = await db
-    .collection("quickQuoteLogs")
-    .where("createdAt", ">", since)
-    .orderBy("createdAt", "asc")
-    .limit(ISSUE_LIMIT)
-    .get();
-
-  return snapshot.docs
-    .map((doc) => {
-      const data = doc.data();
-      const pricingSource = normalizeString(data.pricingSource) ?? "unknown";
-      if (pricingSource === "matrix" && typeof data.estimate === "number") {
-        return null;
-      }
-      return {
-        id: doc.id,
-        passengers: typeof data.passengers === "number" ? data.passengers : null,
-        pricingSource,
-        pickupAddress: normalizeString(data.pickupAddress),
-        dropoffAddress: normalizeString(data.dropoffAddress),
-        estimate: typeof data.estimate === "number" ? data.estimate : null,
-      } as QuickQuoteIssue;
-    })
-    .filter((issue): issue is QuickQuoteIssue => Boolean(issue));
-};
-
 const fetchCounters = async () => {
-  const ids = [
-    "daily-quoteLogs",
-    "overall-quoteLogs",
-    "daily-quickQuoteLogs",
-    "overall-quickQuoteLogs",
-  ];
+  const ids = ["daily-quoteLogs", "overall-quoteLogs"];
   const snaps = await Promise.all(ids.map((id) => db.collection("counters").doc(id).get()));
-  const [dailyQuote, overallQuote, dailyQuick, overallQuick] = snaps.map((snap) => {
+  const [dailyQuote, overallQuote] = snaps.map((snap) => {
     if (!snap.exists) return { count: 0 } as CounterSnapshot;
     const data = snap.data() as { count?: number; date?: string };
     return {
@@ -137,14 +96,12 @@ const fetchCounters = async () => {
 
   return {
     quotes: { daily: dailyQuote, overall: overallQuote },
-    quickQuotes: { daily: dailyQuick, overall: overallQuick },
   };
 };
 
 const buildEmailBody = (
   sinceLabel: string,
   quoteIssues: QuoteIssue[],
-  quickIssues: QuickQuoteIssue[],
   counters: Awaited<ReturnType<typeof fetchCounters>>,
 ) => {
   const lines: string[] = [];
@@ -168,24 +125,9 @@ const buildEmailBody = (
     lines.push("");
   }
 
-  if (quickIssues.length) {
-    lines.push(`Quick quote issues (${quickIssues.length})`);
-    quickIssues.forEach((issue) => {
-      const route = [issue.pickupAddress, issue.dropoffAddress].filter(Boolean).join(" → ");
-      const pax = issue.passengers ? `${issue.passengers} pax` : null;
-      const estimate = formatCurrency(issue.estimate);
-      const extras = [pax, route, estimate].filter(Boolean).join(" • ");
-      lines.push(`- QuickQuote ${issue.id} • pricing: ${issue.pricingSource}${extras ? ` • ${extras}` : ""}`);
-    });
-    lines.push("");
-  }
-
   lines.push("Counters");
   lines.push(
     `- Quote logs today: ${counters.quotes.daily.count} (lifetime ${counters.quotes.overall.count})`,
-  );
-  lines.push(
-    `- Quick quote logs today: ${counters.quickQuotes.daily.count} (lifetime ${counters.quickQuotes.overall.count})`,
   );
   lines.push("");
   lines.push("Monitor sent from Valley Airporter booking watchdog.");
@@ -211,13 +153,9 @@ export const monitorQuoteHealth = onSchedule(
     const sinceMs = Math.max(0, baseSinceMs - OVERLAP_MS);
     const since = admin.firestore.Timestamp.fromMillis(sinceMs);
 
-    const [quoteIssues, quickIssues, counters] = await Promise.all([
-      fetchQuoteIssues(since),
-      fetchQuickQuoteIssues(since),
-      fetchCounters(),
-    ]);
+    const [quoteIssues, counters] = await Promise.all([fetchQuoteIssues(since), fetchCounters()]);
 
-    const issuesFound = quoteIssues.length > 0 || quickIssues.length > 0;
+    const issuesFound = quoteIssues.length > 0;
     const sinceLabel = formatTimestamp(since);
 
     if (!issuesFound) {
@@ -225,7 +163,7 @@ export const monitorQuoteHealth = onSchedule(
       return;
     }
 
-    const body = buildEmailBody(sinceLabel, quoteIssues, quickIssues, counters);
+    const body = buildEmailBody(sinceLabel, quoteIssues, counters);
 
     await queueEmailNotification({
       to: ADMIN_EMAIL,
@@ -237,7 +175,7 @@ export const monitorQuoteHealth = onSchedule(
       {
         lastChecked: now,
         lastAlertAt: now,
-        lastAlertCount: quoteIssues.length + quickIssues.length,
+        lastAlertCount: quoteIssues.length,
       },
       { merge: true },
     );

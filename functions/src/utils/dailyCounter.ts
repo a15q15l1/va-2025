@@ -25,7 +25,7 @@ const formatDateKey = (value: Date) => {
   return `${lookup.year}-${lookup.month}-${lookup.day}`;
 };
 
-export const incrementDailyCounter = async (name: "quickQuoteLogs" | "quoteLogs") => {
+export const incrementDailyCounter = async (name: "quoteLogs") => {
   const todayKey = formatDateKey(new Date());
   const dailyRef = db.collection("counters").doc(`daily-${name}`);
   const overallRef = db.collection("counters").doc(`overall-${name}`);
