@@ -55,6 +55,7 @@ const KNOWN_CITY_OVERRIDES: Record<string, string> = {
   "city of langley": "Langley (Any Address)",
   "abbotsford bc": "Abbotsford (Any Address)",
   "surrey bc": "Surrey (Any Address)",
+  "vancouver bc": "Vancouver (Any Address)",
 };
 
 type PricingMatrixJson = Record<string, Record<string, Record<string, unknown>>>;
@@ -215,8 +216,8 @@ const determineMatrixRoute = ({
   if (pickupTerminal && dropoffArea) {
     return {
       direction: "From the Airport",
-      originLabel: dropoffArea,
-      destinationLabel: pickupTerminal.label,
+      originLabel: pickupTerminal.label,
+      destinationLabel: dropoffArea,
     };
   }
 
@@ -300,16 +301,10 @@ export const quickQuote = onRequest(
             origin: matrixRoute.originLabel,
             destination: matrixRoute.destinationLabel,
             passengerCount: passengers,
-            originAddress: matrixRoute.direction === "To the Airport" ? pickupAddress : dropoffAddress,
-            destinationAddress: matrixRoute.direction === "To the Airport" ? dropoffAddress : pickupAddress,
-            originLatLng:
-              matrixRoute.direction === "To the Airport"
-                ? pickupLatLng ?? null
-                : dropoffLatLng ?? null,
-            destinationLatLng:
-              matrixRoute.direction === "To the Airport"
-                ? dropoffLatLng ?? null
-                : pickupLatLng ?? null,
+            originAddress: pickupAddress,
+            destinationAddress: dropoffAddress,
+            originLatLng: pickupLatLng ?? null,
+            destinationLatLng: dropoffLatLng ?? null,
           });
 
           if (typeof pricing.baseRate === "number") {

@@ -1,28 +1,72 @@
+import { useEffect, useMemo, useState } from "react"
 import { Link, useRouterState } from "@tanstack/react-router"
 import { GlassPanel } from "@/components/ui/GlassPanel"
 import { Plane, MapPin, Phone, Sparkles, Share2 } from "lucide-react"
 import Lottie from "lottie-react"
 import mailSentAnimation from "@/lotties/mail-sent.json"
+import {
+  loadBookingThankYouState,
+  saveBookingThankYouState,
+  type BookingThankYouState,
+} from "@/features/booking/utils/thankYouState"
 
 export const ThankYouPage = () => {
   const { location } = useRouterState()
-  const routerState = location.state as
-    | {
-        paymentLink?: unknown
-        total?: unknown
-        bookingNumber?: unknown
-        paymentPreference?: unknown
-      }
-    | undefined
+  type RouterStateShape = {
+    context?: string
+    paymentLink?: unknown
+    total?: unknown
+    bookingNumber?: unknown
+    bookingId?: unknown
+    paymentPreference?: unknown
+  }
 
-  const paymentLink = typeof routerState?.paymentLink === "string" ? routerState.paymentLink : null
-  const bookingTotalRaw = typeof routerState?.total === "number" ? routerState.total : null
-  const bookingNumber = typeof routerState?.bookingNumber === "number" ? routerState.bookingNumber : null
-  const paymentPreference =
-    routerState?.paymentPreference === "pay_on_arrival" || routerState?.paymentPreference === "pay_now"
-      ? (routerState.paymentPreference as "pay_on_arrival" | "pay_now")
-      : null
+  const routerState = location.state as RouterStateShape | undefined
+
+  const normalizedRouterState = useMemo<BookingThankYouState | null>(() => {
+    if (!routerState || routerState.context === "contact") return null
+    const paymentPreference =
+      routerState.paymentPreference === "pay_on_arrival" || routerState.paymentPreference === "pay_now"
+        ? routerState.paymentPreference
+        : null
+    if (!paymentPreference) return null
+    return {
+      context: "booking",
+      paymentPreference,
+      paymentLink: typeof routerState.paymentLink === "string" ? routerState.paymentLink : null,
+      bookingNumber: typeof routerState.bookingNumber === "number" ? routerState.bookingNumber : null,
+      bookingId: typeof routerState.bookingId === "string" ? routerState.bookingId : null,
+      total: typeof routerState.total === "number" ? routerState.total : null,
+    }
+  }, [routerState])
+
+  const [bookingState, setBookingState] = useState<BookingThankYouState | null>(null)
+
+  useEffect(() => {
+    if (routerState?.context === "contact") {
+      setBookingState(null)
+      return
+    }
+    if (normalizedRouterState) {
+      setBookingState(normalizedRouterState)
+      saveBookingThankYouState(normalizedRouterState)
+      return
+    }
+    const restored = loadBookingThankYouState()
+    if (restored) {
+      setBookingState(restored)
+    }
+  }, [normalizedRouterState, routerState?.context])
+
+  const paymentLink = bookingState?.paymentLink ?? null
+  const bookingTotalRaw = typeof bookingState?.total === "number" ? bookingState.total : null
+  const bookingNumber =
+    typeof bookingState?.bookingNumber === "number" && Number.isFinite(bookingState.bookingNumber) ?
+      bookingState.bookingNumber :
+      null
+  const paymentPreference = bookingState?.paymentPreference ?? null
   const payOnArrival = paymentPreference === "pay_on_arrival"
+  const hasBookingDetails = Boolean(bookingState)
 
   const formattedTotal =
     typeof bookingTotalRaw === "number"
@@ -63,49 +107,61 @@ export const ThankYouPage = () => {
               <Lottie animationData={mailSentAnimation} loop autoplay className="h-56 w-56 md:h-72 md:w-72" />
             </div>
           </div>
-          {paymentLink ? (
-            <div className="rounded-3xl border border-white/70 bg-white/85 p-7 text-midnight shadow-inner space-y-3">
-              <p className="text-base font-semibold uppercase tracking-[0.32em] text-horizon">
-                Complete Your Booking
-              </p>
-              <p className="text-base leading-relaxed text-midnight/80">
-                Secure your ride now—this Square checkout becomes your invoice once paid.
-              </p>
-              {formattedTotal ? (
-                <p className="text-lg font-semibold text-horizon">Amount: {formattedTotal}</p>
-              ) : null}
-              {bookingNumber != null ? (
-                <p className="text-base text-midnight/70">Form #: {bookingNumber}</p>
-              ) : null}
-              <a
-                href={paymentLink}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="mt-4 inline-flex items-center gap-2 rounded-full border border-emerald-400 bg-gradient-to-r from-emerald-400 via-emerald-500 to-emerald-600 px-6 py-3 text-xs font-semibold uppercase tracking-[0.32em] text-white shadow-[0_20px_45px_-18px_rgba(16,185,129,0.55)] transition hover:from-emerald-500 hover:via-emerald-600 hover:to-emerald-700 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-emerald-300/50"
-              >
-                Complete Payment
-              </a>
-              <p className="text-base text-midnight/70">
-                Can’t click the button? Copy and paste this link into your browser:
-                <br />
-                <a href={paymentLink} className="break-all text-horizon underline" target="_blank" rel="noopener noreferrer">
-                  {paymentLink}
+          {hasBookingDetails ? (
+            paymentLink ? (
+              <div className="rounded-3xl border border-white/70 bg-white/85 p-7 text-midnight shadow-inner space-y-3">
+                <p className="text-base font-semibold uppercase tracking-[0.32em] text-horizon">
+                  Complete Your Booking
+                </p>
+                <p className="text-base leading-relaxed text-midnight/80">
+                  Secure your ride now—this Square checkout becomes your invoice once paid.
+                </p>
+                {formattedTotal ? (
+                  <p className="text-lg font-semibold text-horizon">Amount: {formattedTotal}</p>
+                ) : null}
+                {bookingNumber != null ? (
+                  <p className="text-base text-midnight/70">Form #: {bookingNumber}</p>
+                ) : null}
+                <a
+                  href={paymentLink}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="mt-4 inline-flex items-center gap-2 rounded-full border border-emerald-400 bg-gradient-to-r from-emerald-400 via-emerald-500 to-emerald-600 px-6 py-3 text-xs font-semibold uppercase tracking-[0.32em] text-white shadow-[0_20px_45px_-18px_rgba(16,185,129,0.55)] transition hover:from-emerald-500 hover:via-emerald-600 hover:to-emerald-700 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-emerald-300/50"
+                >
+                  Complete Payment
                 </a>
-              </p>
-            </div>
+                <p className="text-base text-midnight/70">
+                  Can’t click the button? Copy and paste this link into your browser:
+                  <br />
+                  <a href={paymentLink} className="break-all text-horizon underline" target="_blank" rel="noopener noreferrer">
+                    {paymentLink}
+                  </a>
+                </p>
+              </div>
+            ) : (
+              <div className="rounded-3xl border border-white/70 bg-white/75 p-7 text-base text-midnight/80 shadow-inner space-y-3">
+                <p className="font-heading text-base font-bold uppercase tracking-[0.32em] text-horizon">
+                  {payOnArrival ? "Pay Driver At Pickup" : "Payment Reminder"}
+                </p>
+                <p className="leading-relaxed">
+                  {payOnArrival
+                    ? "You chose to pay your driver directly at pickup. Dispatch will confirm once your shuttle is assigned—call or text (604) 751-6688 if anything changes."
+                    : "We’ll email your secure Square payment link shortly. Need it right away? Call or text dispatch at (604) 751-6688 and we’ll send it instantly."}
+                </p>
+                {bookingNumber != null ? (
+                  <p className="text-base font-bold text-midnight/80">Form # {bookingNumber}</p>
+                ) : null}
+              </div>
+            )
           ) : (
-            <div className="rounded-3xl border border-white/70 bg-white/75 p-7 text-base text-midnight/80 shadow-inner space-y-3">
+            <div className="rounded-3xl border border-white/70 bg-white/80 p-7 text-base text-midnight/80 shadow-inner space-y-3">
               <p className="font-heading text-base font-bold uppercase tracking-[0.32em] text-horizon">
-                {payOnArrival ? "Pay Driver At Pickup" : "Payment Reminder"}
+                Message Received
               </p>
-              <p className="leading-relaxed">
-                {payOnArrival
-                  ? "You chose to pay your driver directly at pickup. Dispatch will confirm once your shuttle is assigned—call or text (604) 751-6688 if anything changes."
-                  : "We’ll email your secure Square payment link shortly. Need it right away? Call or text dispatch at (604) 751-6688 and we’ll send it instantly."}
+              <p>
+                Dispatch has your details and will reply shortly with next steps. If this is urgent, please call or text
+                (604) 751-6688 so we can assist immediately.
               </p>
-              {bookingNumber != null ? (
-                <p className="text-base font-bold text-midnight/80">Form # {bookingNumber}</p>
-              ) : null}
             </div>
           )}
           <div className="rounded-3xl border border-sky-100 bg-[#eaf4ff] p-6 text-midnight shadow-inner shadow-sky-100/80">

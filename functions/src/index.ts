@@ -25,3 +25,5 @@ export { sendDailyBookingSummary } from "./dailyBookingSummary";
 export { watchBookingPayments } from "./paymentStatusWatcher";
 export { monitorQuoteHealth } from "./quoteHealthMonitor";
 export { createTestBooking } from "./createTestBooking";
+export { watchMailDelivery, monitorBookingNotifications } from "./mailMonitor";
+export { agentHandoff } from "./agentHandoff";

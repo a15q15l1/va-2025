@@ -45,7 +45,7 @@ export const ContactPage = () => {
 
       setStatus("success")
       form.reset()
-      navigate({ to: "/thank-you" })
+      navigate({ to: "/thank-you", state: { context: "contact" } })
     } catch (error) {
       console.error(error)
       setSubmitError(

@@ -17,10 +17,10 @@ export const sendStudioMessage = async (to: string, message: string) => {
   await client.studio.v2.flows(FLOW_SID).executions.create({
     to,
     from: TWILIO_NUMBER,
-    parameters: JSON.stringify({
+    parameters: {
       to,
       from: TWILIO_NUMBER,
       message,
-    }),
+    },
   });
 };

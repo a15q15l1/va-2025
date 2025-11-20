@@ -6,7 +6,7 @@ import {
   formatBookingTag,
   SmsBookingContext,
 } from "./smsTemplates";
-import { queueEmailNotification } from "./notifications";
+import { queueEmailNotification, queueSmsNotification } from "./notifications";
 
 if (!admin.apps.length) admin.initializeApp();
 const db = admin.firestore();
@@ -16,6 +16,18 @@ const ADMIN_EMAIL = (() => {
   if (envEmail) return envEmail;
   return "info@valleyairporter.ca";
 })();
+const ADMIN_SMS_RECIPIENTS = Array.from(
+  new Set(
+    [
+      process.env.ADMIN_NOTIFICATION_PHONE,
+      process.env.ADMIN_NOTIFICATION_PHONE_ALT,
+      "+16047516688",
+      "+17788780546",
+    ]
+      .map((value) => value?.trim())
+      .filter(Boolean),
+  ),
+);
 
 const normalizePhone = (raw: unknown) => {
   if (typeof raw !== "string") return "";
@@ -112,6 +124,7 @@ export const studioCancel = functions.https.onRequest(async (req, res) => {
       return;
     }
 
+    const reasonRaw = (bodyPayload?.reason ?? "").toString().trim().toLowerCase();
     const cancelMatch = bodyTxt.match(/^cancel\s+booking\s+#?(\d{5})\s*$/i);
     const isHelp = /^\s*(help|menu|options)\s*$/i.test(bodyTxt);
     const isStartStop = /^\s*(start|stop)\s*$/i.test(bodyTxt);
@@ -188,14 +201,30 @@ export const studioCancel = functions.https.onRequest(async (req, res) => {
         return;
       }
 
+      const cancellationReason =
+        reasonRaw === "change-time"
+          ? "customer_change_time"
+          : reasonRaw === "cancel"
+            ? "customer_cancel"
+            : "customer_sms";
+     const ackMessage =
+       reasonRaw === "change-time"
+         ? `Booking #${bookingNumber} has been marked for a schedule change. An agent will follow up shortly.`
+          : `Booking #${bookingNumber} has been canceled. No further reminders will be sent. Need to rebook? valleyairporter.ca.`;
+
       await db.runTransaction(async (tx) => {
         tx.update(doc.ref, {
           status: "canceled",
+          cancellationReason,
+          cancellationSource: "sms",
+          canceledAt: admin.firestore.FieldValue.serverTimestamp(),
           remind24Sent: true,
           remind10Sent: true,
           updatedAt: admin.firestore.FieldValue.serverTimestamp(),
           statusHistory: admin.firestore.FieldValue.arrayUnion({
             status: "canceled",
+            reason: cancellationReason,
+            source: "sms",
             timestamp: admin.firestore.Timestamp.now(),
           }),
         });
@@ -221,9 +250,20 @@ export const studioCancel = functions.https.onRequest(async (req, res) => {
         text: emailBody,
       });
 
+      const adminAlert = `SMS cancellation from ${from}. Booking #${bookingNumber}. Reason: ${cancellationReason}.`;
+      await Promise.all(
+        ADMIN_SMS_RECIPIENTS.map((to) =>
+          queueSmsNotification({
+            to: to!,
+            message: adminAlert,
+            metadata: { bookingId: doc.id, type: "cancellation-admin" },
+          }),
+        ),
+      );
+
       res.json({
         send: true,
-        ack: `Booking #${bookingNumber} has been canceled. No further reminders will be sent. Need to rebook? valleyairporter.ca.`,
+        ack: ackMessage,
       });
       return;
     }

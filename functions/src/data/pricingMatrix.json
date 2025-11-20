@@ -578,6 +578,20 @@
         "12-14": 400
       }
     },
+    "Vancouver (Any Address)": {
+      "Abbotsford International Airport (YXX)": {
+        "1": 140,
+        "2": 150,
+        "3": 160,
+        "4": 170,
+        "5": 180,
+        "6": 190,
+        "6v": 280,
+        "7v": 280,
+        "8-11": 350,
+        "12-14": 400
+      }
+    },
     "Harrison (Any Address)": {
       "Abbotsford International Airport (YXX)": {
         "1": 110,
@@ -619,6 +633,18 @@
       }
     },
     "Harrison Hot Springs (Any Address)": {
+      "Abbotsford International Airport (YXX)": {
+        "1": 110,
+        "2": 120,
+        "3": 130,
+        "4": 140,
+        "5": 150,
+        "6": 160,
+        "6v": 220,
+        "7v": 220,
+        "8-11": 250,
+        "12-14": 300
+      },
       "Vancouver International Airport (YVR)": {
         "1": 250,
         "2": 260,

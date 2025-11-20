@@ -27,6 +27,12 @@ interface PlacesAutocompleteInputProps extends Omit<InputHTMLAttributes<HTMLInpu
 
 type Prediction = google.maps.places.AutocompletePrediction
 
+type CachedPredictionEntry = {
+  predictions: Prediction[]
+  noResults: boolean
+  usingLegacy: boolean
+}
+
 const COUNTRY_RESTRICTIONS: google.maps.places.ComponentRestrictions = {
   country: ["ca", "us"],
 }
@@ -66,7 +72,9 @@ const expandStreetSuffixes = (value: string) =>
     return replacement
   })
 
-const RESULTS_DEBOUNCE_MS = 180
+const RESULTS_DEBOUNCE_MS = 280
+const MIN_QUERY_LENGTH = 3
+const NEW_PLACES_API_ENABLED = import.meta.env.VITE_USE_NEW_PLACES_API === "true"
 
 export const PlacesAutocompleteInput = ({
   value,
@@ -87,7 +95,9 @@ export const PlacesAutocompleteInput = ({
   const placesServiceRef = useRef<google.maps.places.PlacesService | null>(null)
   const usingLegacyRef = useRef(false)
   const legacySessionTokenRef = useRef<google.maps.places.AutocompleteSessionToken | null>(null)
-  const sessionTokenRef = useRef<string>(newSessionToken())
+  const sessionTokenRef = useRef<string | null>(null)
+  const predictionsCacheRef = useRef<Map<string, CachedPredictionEntry>>(new Map())
+  const inFlightQueriesRef = useRef<Set<string>>(new Set())
   const predictionTimeoutRef = useRef<number | null>(null)
 
   const [predictions, setPredictions] = useState<Prediction[]>([])
@@ -122,6 +132,29 @@ export const PlacesAutocompleteInput = ({
       latestOnPlaceCleared.current?.()
     }
   }, [value])
+
+  const startNewSession = useCallback(() => {
+    predictionsCacheRef.current.clear()
+    inFlightQueriesRef.current.clear()
+    const token = newSessionToken()
+    sessionTokenRef.current = token
+    console.log("[PlacesAutocomplete] Autocomplete session start", token)
+    return token
+  }, [])
+
+  const getSessionToken = useCallback(() => {
+    return sessionTokenRef.current ?? startNewSession()
+  }, [startNewSession])
+
+  const endSession = useCallback(
+    (reason: "selection" | "blur") => {
+      if (sessionTokenRef.current) {
+        console.log("[PlacesAutocomplete] Autocomplete session end", reason, sessionTokenRef.current)
+      }
+      sessionTokenRef.current = null
+    },
+    [],
+  )
 
   const ensureLegacyServices = useCallback(async () => {
     if (autoServiceRef.current && placesServiceRef.current && googleRef.current) {
@@ -218,12 +251,57 @@ export const PlacesAutocompleteInput = ({
     [ensureLegacyServices],
   )
 
+  const applyPredictionEntry = useCallback((entry: CachedPredictionEntry) => {
+    setPredictions(entry.predictions)
+    usingLegacyRef.current = entry.usingLegacy
+    setDropdownVisible(entry.predictions.length > 0 || entry.noResults)
+    setActiveIndex(-1)
+    setNoResults(entry.noResults)
+  }, [])
+
+  const fulfillLegacyPredictions = useCallback(
+    async (query: string, cacheKey: string) => {
+      const legacyResults = await legacyAutocomplete(query)
+      const entry: CachedPredictionEntry = {
+        predictions: legacyResults,
+        noResults: legacyResults.length === 0,
+        usingLegacy: true,
+      }
+      predictionsCacheRef.current.set(cacheKey, entry)
+      applyPredictionEntry(entry)
+    },
+    [applyPredictionEntry, legacyAutocomplete],
+  )
+
   const requestPredictions = useCallback(
-    async (inputValue: string) => {
+    async (rawInputValue: string) => {
+      const query = rawInputValue.trim()
+      if (query.length < MIN_QUERY_LENGTH) return
+
+      const cacheKey = query.toLowerCase()
+      const cached = predictionsCacheRef.current.get(cacheKey)
+      if (cached) {
+        applyPredictionEntry(cached)
+        return
+      }
+
+      if (inFlightQueriesRef.current.has(cacheKey)) {
+        return
+      }
+
+      inFlightQueriesRef.current.add(cacheKey)
+
       try {
+        if (!NEW_PLACES_API_ENABLED) {
+          await fulfillLegacyPredictions(query, cacheKey)
+          return
+        }
+
+        const token = getSessionToken()
+        console.log("[PlacesAutocomplete] Autocomplete call", { token, queryLength: query.length })
         const results = await placesAutocompleteNew({
-          input: inputValue,
-          sessionToken: sessionTokenRef.current,
+          input: query,
+          sessionToken: token,
           regionCode: "CA",
           languageCode: "en",
           biasCenter: { lat: 49.0504, lng: -122.3045 },
@@ -231,55 +309,49 @@ export const PlacesAutocompleteInput = ({
         })
 
         if (results.length) {
-          setPredictions(
-            results.map((r) => ({
-              description: `${r.primaryText}${r.secondaryText ? ", " + r.secondaryText : ""}`,
-              place_id: r.placeId,
-              structured_formatting: {
-                main_text: r.primaryText,
-                secondary_text: r.secondaryText ?? "",
-              },
-            })) as unknown as Prediction[],
-          )
-          usingLegacyRef.current = false
+          const mapped = results.map((r) => ({
+            description: `${r.primaryText}${r.secondaryText ? ", " + r.secondaryText : ""}`,
+            place_id: r.placeId,
+            structured_formatting: {
+              main_text: r.primaryText,
+              secondary_text: r.secondaryText ?? "",
+            },
+          })) as unknown as Prediction[]
+
+          const entry: CachedPredictionEntry = {
+            predictions: mapped,
+            noResults: false,
+            usingLegacy: false,
+          }
+          predictionsCacheRef.current.set(cacheKey, entry)
           setMapsLoadError(null)
-          setDropdownVisible(true)
-          setActiveIndex(-1)
-          setNoResults(false)
+          applyPredictionEntry(entry)
         } else {
-          setPredictions([])
-          usingLegacyRef.current = false
+          const entry: CachedPredictionEntry = {
+            predictions: [],
+            noResults: true,
+            usingLegacy: false,
+          }
+          predictionsCacheRef.current.set(cacheKey, entry)
           setMapsLoadError(null)
-          setDropdownVisible(Boolean(inputValue.trim()))
-          setActiveIndex(-1)
-          setNoResults(Boolean(inputValue.trim()))
+          applyPredictionEntry(entry)
         }
       } catch (err) {
         console.warn("[PlacesAutocomplete] (New) autocomplete failed", err)
-        const legacyResults = await legacyAutocomplete(inputValue)
-        if (legacyResults.length) {
-          usingLegacyRef.current = true
-          setPredictions(legacyResults)
-          setDropdownVisible(true)
-          setActiveIndex(-1)
-          setNoResults(false)
-        } else {
-          usingLegacyRef.current = false
-          setPredictions([])
-          setDropdownVisible(Boolean(inputValue.trim()))
-          setActiveIndex(-1)
-          setNoResults(Boolean(inputValue.trim()))
-        }
+        await fulfillLegacyPredictions(query, cacheKey)
+      } finally {
+        inFlightQueriesRef.current.delete(cacheKey)
       }
     },
-    [legacyAutocomplete],
+    [applyPredictionEntry, fulfillLegacyPredictions, getSessionToken],
   )
 
   const schedulePredictions = (inputValue: string) => {
     if (predictionTimeoutRef.current) {
       window.clearTimeout(predictionTimeoutRef.current)
     }
-    if (!inputValue.trim()) {
+    const trimmed = inputValue.trim()
+    if (!trimmed || trimmed.length < MIN_QUERY_LENGTH) {
       setPredictions([])
       setDropdownVisible(false)
       setActiveIndex(-1)
@@ -288,7 +360,7 @@ export const PlacesAutocompleteInput = ({
     }
 
     predictionTimeoutRef.current = window.setTimeout(() => {
-      void requestPredictions(inputValue)
+      void requestPredictions(trimmed)
       predictionTimeoutRef.current = null
     }, RESULTS_DEBOUNCE_MS)
   }
@@ -312,7 +384,7 @@ export const PlacesAutocompleteInput = ({
           address: expandStreetSuffixes(prediction.description),
           placeId: undefined,
         })
-        sessionTokenRef.current = newSessionToken()
+        endSession("selection")
         return
       }
 
@@ -322,7 +394,7 @@ export const PlacesAutocompleteInput = ({
         try {
           const place = await placeDetailsNew({
             placeId: prediction.place_id,
-            sessionToken: sessionTokenRef.current,
+            sessionToken: sessionTokenRef.current ?? getSessionToken(),
           })
 
           selection = {
@@ -349,12 +421,13 @@ export const PlacesAutocompleteInput = ({
       }
 
       latestOnPlaceSelect.current?.(selection)
-      sessionTokenRef.current = newSessionToken()
+      endSession("selection")
     },
-    [legacyPlaceDetails, onChange],
+    [endSession, getSessionToken, legacyPlaceDetails, onChange],
   )
 
   const handleFocus: FocusEventHandler<HTMLInputElement> = () => {
+    getSessionToken()
     if (predictions.length > 0) {
       setDropdownVisible(true)
     }
@@ -362,7 +435,10 @@ export const PlacesAutocompleteInput = ({
 
   const handleBlur: FocusEventHandler<HTMLInputElement> = () => {
     // Delay closing so click handlers can run
-    window.setTimeout(() => setDropdownVisible(false), 150)
+    window.setTimeout(() => {
+      setDropdownVisible(false)
+      endSession("blur")
+    }, 150)
   }
 
   const handleKeyDown: KeyboardEventHandler<HTMLInputElement> = (event) => {

@@ -22,6 +22,11 @@ import { experienceCopy } from "@/data/homeFeatures"
 import { callFunction } from "@/lib/api/client"
 import { PlacesAutocompleteInput, type PlaceSelection } from "@/components/maps/PlacesAutocompleteInput"
 
+declare global {
+  interface Window {
+    fbq?: (...args: unknown[]) => void
+  }
+}
 
 const adjustWidth = (url: string, width: number) => {
   if (!url) return url
@@ -287,7 +292,7 @@ const QuickQuoteEstimator = () => {
   const [form, setForm] = useState({
     pickup: "",
     dropoff: "",
-    passengers: "2",
+    passengers: "1",
   })
   const [pickupPlace, setPickupPlace] = useState<PlaceSelection | null>(null)
   const [dropoffPlace, setDropoffPlace] = useState<PlaceSelection | null>(null)
@@ -322,6 +327,9 @@ const QuickQuoteEstimator = () => {
       return
     }
     try {
+      if (typeof window !== "undefined") {
+        window.dataLayer?.push?.({ event: "quick_quote_submitted" })
+      }
       setStatus("loading")
       setError(null)
       const response = await callFunction<{
@@ -350,6 +358,17 @@ const QuickQuoteEstimator = () => {
       })
       setFieldErrors({ pickup: false, dropoff: false })
       setStatus("success")
+      if (typeof window !== "undefined" && typeof window.fbq === "function") {
+        window.fbq("trackCustom", "RequestQuoteSubmitted", {
+          pickup: pickupPlace?.address ?? form.pickup,
+          dropoff: dropoffPlace?.address ?? form.dropoff,
+          passengers: normalizedPassengers,
+          estimateAmount: response.estimate.amount,
+          estimateCurrency: response.estimate.currency,
+          distanceKm: response.distanceKm,
+          durationMinutes: response.durationMinutes,
+        })
+      }
     } catch (err) {
       console.error(err)
       setStatus("error")
@@ -424,7 +443,7 @@ const QuickQuoteEstimator = () => {
         </div>
         <div className="grid gap-2 max-w-xs">
           <label className="text-[0.85rem] uppercase tracking-[0.35em] text-midnight/70">
-            Passengers
+            Passenger Count
           </label>
           <input
             type="number"

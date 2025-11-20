@@ -66,9 +66,15 @@ export const queueBookingEmail = async ({
   flightNumber,
   paymentLinkUrl,
   force = false,
-}: BookingEmailPayload) => {
-  const normalizedEmail = customerEmail?.trim().toLowerCase()
-  if (!normalizedEmail) return;
+}: BookingEmailPayload): Promise<string | null> => {
+  const normalizedEmail = customerEmail?.trim().toLowerCase();
+  if (!normalizedEmail) {
+    logger.warn("queueBookingEmail skipped due to missing customer email", {
+      bookingId,
+      bookingNumber,
+    });
+    return null;
+  }
 
   const specialNote = `Please reconfirm your booking via text message or email 1-2 days in advance to make sure there are no changes in your plans. We cannot guarantee service if information provided is incorrect or if service is required in less than 24 hours.`;
 
@@ -294,6 +300,8 @@ export const queueBookingEmail = async ({
     supportEmail && supportEmail !== normalizedEmail ? [supportEmail] : [];
   const combinedRecipients = [normalizedEmail, ...ccRecipients];
 
+  let mailDocId: string | null = null;
+
   await db.runTransaction(async (tx) => {
     const bookingSnap = await tx.get(bookingRef);
     const notificationState =
@@ -305,6 +313,7 @@ export const queueBookingEmail = async ({
     }
 
     const mailRef = db.collection("mail").doc();
+    mailDocId = mailRef.id;
 
     tx.set(
       mailRef,
@@ -347,6 +356,16 @@ export const queueBookingEmail = async ({
       { merge: true },
     );
   });
+
+  if (mailDocId) {
+    logger.info("Queued booking confirmation email", {
+      bookingId,
+      bookingNumber,
+      mailDocId,
+      recipients: combinedRecipients,
+    });
+  }
+  return mailDocId;
 };
 
 export interface PaymentConfirmationEmailPayload {
@@ -512,9 +531,6 @@ export const queuePaymentConfirmationEmail = async ({
           <h1 style="margin: 12px 0 8px; font-size: 30px; font-weight: 600;">
             ${heroTitle}
           </h1>
-          <p style="margin: 0; font-size: 15px; line-height: 1.6; opacity: 0.9;">
-            Thank you for supporting local transportation across the Fraser Valley.
-          </p>
         </div>
         <div style="padding: 32px 34px; background: #f9fbff;">
           <p style="margin: 0 0 1.2rem 0; color: #0f2647; font-size: 1rem; line-height: 1.6;">
@@ -536,9 +552,6 @@ export const queuePaymentConfirmationEmail = async ({
             <p style="margin: 0 0 0.6rem; font-weight: 600; color: #0f305c;">Need anything else?</p>
             <p style="margin: 0; color: #133864; line-height: 1.5;">Reply to this email or reach dispatch at <a href="tel:+16047516688" style="color: #0f4c81; text-decoration: none; font-weight: 600;">(604) 751-6688</a>.</p>
           </div>
-          <p style="margin: 0; color: #1b3255; line-height: 1.6;">
-            We appreciate you choosing a local operator—your booking keeps Valley Airporter on the road for our community.
-          </p>
           <p style="margin: 1rem 0 0; color: #10213f; font-weight: 600;">
             With gratitude,<br/>Valley Airporter Dispatch
           </p>
@@ -549,7 +562,6 @@ export const queuePaymentConfirmationEmail = async ({
 
   const textLines = [
     `Valley Airporter - Booking ${bookingReference} has been paid online`,
-    "Thank you for supporting local transportation in the Fraser Valley.",
     amountDisplay ? `Amount paid: ${amountDisplay}` : null,
     paymentCompletedDisplay ? `Completed on: ${paymentCompletedDisplay}` : null,
     pickupDisplay ? `Trip date: ${pickupDisplay}` : null,
@@ -560,7 +572,6 @@ export const queuePaymentConfirmationEmail = async ({
     paymentId ? `Payment ID: ${paymentId}` : null,
     paymentOrderId ? `Order reference: ${paymentOrderId}` : null,
     "Dispatch line: (604) 751-6688",
-    "We appreciate you riding local with Valley Airporter.",
   ]
     .filter((value): value is string => Boolean(value))
     .join("\n");

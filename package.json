@@ -29,6 +29,7 @@
     "react-hook-form": "^7.65.0",
     "serve": "^14.2.5",
     "tailwind-merge": "^3.3.1",
+    "twilio": "^5.10.5",
     "zod": "^4.1.12",
     "zustand": "^5.0.8"
   },

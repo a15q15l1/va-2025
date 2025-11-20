@@ -41,14 +41,19 @@ const ADMIN_PHONE =
   asTrimmedString(process.env.ADMIN_NOTIFICATION_PHONE) ??
   asTrimmedString(functionsConfig?.admin?.notification_phone) ??
   "";
+const SECONDARY_ADMIN_PHONE =
+  asTrimmedString(process.env.ADMIN_NOTIFICATION_PHONE_ALT) ??
+  "";
+const HELP_DESK_PHONE = "(604) 751-6688";
 const DEFAULT_REPLY_HELP =
   asTrimmedString(process.env.SMS_HELP_MESSAGE) ??
   asTrimmedString(functionsConfig?.sms?.help_message) ??
-  "Valley Airporter: Reply STOP to cancel future updates, START to resume, HELP for assistance. valleyairporter.ca/contact";
+  "Valley Airporter: Reply STOP to cancel future updates, START to resume, HELP for assistance, or OPTIONS for the help desk. valleyairporter.ca/contact";
 
 
 const CANCEL_WORDS = new Set(["cancel", "2", "stop", "unsubscribe", "end", "quit"]);
 const HELP_WORDS = new Set(["help", "?", "info"]);
+const OPTIONS_WORDS = new Set(["options"]);
 
 const resolveTwilioAuthToken = (): string | null => {
   const envToken = asTrimmedString(process.env.TWILIO_AUTH_TOKEN);
@@ -104,6 +109,25 @@ const findUpcomingBookings = async (phone: string, limit = 5) => {
     }
   }
   return [];
+};
+
+const formatCancelToken = (bookingNumber?: number | null) => {
+  if (typeof bookingNumber === "number" && Number.isFinite(bookingNumber)) {
+    return bookingNumber.toString().padStart(5, "0");
+  }
+  return "your booking #";
+};
+
+const buildOptionsReply = (bookingNumber?: number | null) => {
+  const token = formatCancelToken(bookingNumber);
+  return `- Valley Airporter SMS Help Desk -
+
+1. For FAQ, Visit: ValleyAirporter.ca/FAQ
+2. If you would like to cancel the booking, text: Cancel Booking [${token}]
+
+To resume SMS alerts, reply START.
+
+You can text/call us at anytime at ${HELP_DESK_PHONE}`;
 };
 
 export const cancelBooking = async (bookingRef: FirebaseFirestore.DocumentReference) => {
@@ -169,14 +193,21 @@ export const notifyCancellation = async (bookingId: string, bookingData: Firebas
     });
   }
 
-  if (ADMIN_PHONE) {
-    const adminMessage = buildCancellationAdminMessage({ ...context, passengerPhone: context.passengerPhone });
-    await queueSmsNotification({
-      to: ADMIN_PHONE,
-      message: adminMessage,
-      metadata: { bookingId, type: "cancellation-admin" },
-    });
-  }
+  const adminMessage = buildCancellationAdminMessage({ ...context, passengerPhone: context.passengerPhone });
+  const smsTargets = ADMIN_SMS_RECIPIENTS.length > 0
+    ? ADMIN_SMS_RECIPIENTS
+    : normalizeAdminPhone(ADMIN_PHONE)
+      ? [normalizeAdminPhone(ADMIN_PHONE)!]
+      : [];
+  await Promise.all(
+    smsTargets.map((to) =>
+      queueSmsNotification({
+        to,
+        message: adminMessage,
+        metadata: { bookingId, type: "cancellation-admin" },
+      }),
+    ),
+  );
 
   const emailBody = buildCancellationEmail(context);
   const subject = `Valley Airporter booking canceled - ${formatBookingTag(context.bookingNumber, bookingId)}`;
@@ -310,12 +341,21 @@ export const smsInbound = functions.https.onRequest(async (req, res) => {
     return;
   }
 
+  if (OPTIONS_WORDS.has(lower)) {
+    const bookings = await findUpcomingBookings(from, 1);
+    const bookingNumber = bookings.length > 0 ? bookings[0].data()?.bookingNumber ?? null : null;
+    respond(res, buildOptionsReply(bookingNumber));
+    return;
+  }
+
   const sessionRef = db.collection(SESSION_COLLECTION).doc(sessionIdForPhone(from));
   const sessionSnap = await sessionRef.get();
   const session = sessionSnap.exists ? sessionSnap.data() : null;
   const sessionValid = session && typeof session.expiresAt === "number" && session.expiresAt > Date.now();
 
-  if (CANCEL_WORDS.has(lower) || optOutType === "STOP") {
+  const shouldProcessStop = optOutType === "STOP" || CANCEL_WORDS.has(lower);
+
+  if (shouldProcessStop) {
     const bookings = await findUpcomingBookings(from);
     if (bookings.length === 0) {
       respond(res, "We could not locate any upcoming bookings for this number.");
@@ -332,7 +372,7 @@ export const smsInbound = functions.https.onRequest(async (req, res) => {
       if (!result.alreadyCanceled) {
         await notifyCancellation(bookings[0].id, result.data ?? {});
       }
-      respond(res, "Your booking has been canceled. If this was a mistake, reply HELP.");
+      respond(res, "Your booking has been canceled. Reply START to resume alerts or HELP for assistance.");
       if (sessionSnap.exists) await sessionRef.delete();
       return;
     }
@@ -386,23 +426,47 @@ export const smsInbound = functions.https.onRequest(async (req, res) => {
       await notifyCancellation(selected.bookingId, result.data ?? {});
     }
     await sessionRef.delete();
-    respond(res, "Your booking has been canceled. Reply HELP for assistance.");
+    respond(res, "Your booking has been canceled. Reply START to resume alerts or HELP for assistance.");
     return;
   }
 
   if (/^1$/.test(lower) || /\bconfirm\b/.test(lower)) {
     respond(res, "Thanks! Your booking remains confirmed. Reply 2 to cancel if plans change.");
-    if (ADMIN_PHONE) {
-      await queueSmsNotification({
-        to: ADMIN_PHONE,
-        message: `Customer ${from} confirmed by SMS.`,
-        metadata: { type: "confirm-admin" },
-      });
-    } else {
-      functions.logger.warn("ADMIN_PHONE not configured; skipping admin SMS.");
+    if (ADMIN_SMS_RECIPIENTS.length === 0 && !ADMIN_PHONE) {
+      functions.logger.warn("ADMIN phones not configured; skipping admin SMS.");
+      return;
     }
+    const targets =
+      ADMIN_SMS_RECIPIENTS.length > 0
+        ? ADMIN_SMS_RECIPIENTS
+        : [normalizeAdminPhone(ADMIN_PHONE) ?? ADMIN_PHONE].filter(Boolean) as string[];
+    await Promise.all(
+      targets.map((to) =>
+        queueSmsNotification({
+          to,
+          message: `Customer ${from} confirmed by SMS.`,
+          metadata: { type: "confirm-admin" },
+        }),
+      ),
+    );
     return;
   }
 
   respond(res, DEFAULT_REPLY_HELP);
   });
+const normalizeAdminPhone = (raw?: string | null) => {
+  if (!raw) return null;
+  const digits = raw.replace(/[^0-9]/g, "");
+  if (!digits) return null;
+  if (digits.startsWith("1") && digits.length === 11) return `+${digits}`;
+  if (digits.length === 10) return `+1${digits}`;
+  return raw.startsWith("+") ? raw : `+${digits}`;
+};
+
+const ADMIN_SMS_RECIPIENTS = Array.from(
+  new Set(
+    [ADMIN_PHONE, SECONDARY_ADMIN_PHONE, "+16047516688", "+17788780546"]
+      .map((value) => normalizeAdminPhone(value))
+      .filter((value): value is string => Boolean(value)),
+  ),
+);

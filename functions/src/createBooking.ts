@@ -7,7 +7,7 @@ import { MAPS_SERVER_KEY } from "./maps";
 import { resolveLocationDetails } from "./data/locationDirectory";
 import { createSquarePaymentLink, getSquareSecrets } from "./square";
 import { queueBookingEmail } from "./email";
-import { queueSmsNotification } from "./notifications";
+import { queueSmsNotification, queueEmailNotification } from "./notifications";
 import { buildConfirmationMessage, SmsBookingContext } from "./smsTemplates";
 import { sendBookingConfirmation } from "./studioConfirm";
 import { getOptionalUser } from "./_auth";
@@ -19,6 +19,9 @@ const db = admin.firestore();
 
 const GST_RATE = 0.05;
 const ADMIN_CONFIRMATION_PHONE = process.env.ADMIN_NOTIFICATION_PHONE ?? null;
+const SECONDARY_ADMIN_PHONE = process.env.ADMIN_NOTIFICATION_PHONE_ALT ?? null;
+const DEFAULT_ADMIN_NOTIFICATION_PHONES = ["+16047516688", "+17788780546"];
+const SUPPORT_EMAIL = process.env.ADMIN_NOTIFICATION_EMAIL ?? "info@valleyairporter.ca";
 
 const formatPickupDisplay = (date: Date) => {
   const datePart = new Intl.DateTimeFormat("en-US", {
@@ -45,6 +48,16 @@ const normalizePhoneNumber = (value?: string | null): string | null => {
   if (digits.startsWith("+")) return digits;
   if (digits.startsWith("1") && digits.length === 11) return `+${digits}`;
   return `+1${digits}`;
+};
+
+const getAdminNotificationPhones = (): string[] => {
+  const raw = new Set<string>();
+  if (ADMIN_CONFIRMATION_PHONE) raw.add(ADMIN_CONFIRMATION_PHONE);
+  if (SECONDARY_ADMIN_PHONE) raw.add(SECONDARY_ADMIN_PHONE);
+  DEFAULT_ADMIN_NOTIFICATION_PHONES.forEach((phone) => raw.add(phone));
+  return Array.from(raw)
+    .map((phone) => normalizePhoneNumber(phone))
+    .filter((value): value is string => Boolean(value));
 };
 
 const buildPhoneVariants = (normalized: string | null): string[] => {
@@ -625,22 +638,20 @@ export const createBooking = onRequest({
         },
       });
 
-      const adminPhone = normalizePhoneNumber(ADMIN_CONFIRMATION_PHONE);
-      if (adminPhone) {
-        const adminMessage = [
-          `New booking #${formatBookingNumber(bookingNumber)} confirmed.`,
-          `${passenger.primaryPassenger}`,
-          `${canonicalTrip.origin ?? "Pickup"} → ${canonicalTrip.destination ?? "Drop-off"}`,
-          `${pickupDisplay}`,
-        ].join(" ");
-        await queueSmsNotification({
-          to: adminPhone,
-          message: adminMessage,
-          metadata: {
-            bookingId: bookingRef.id,
-            type: "admin-confirmation",
-          },
-        });
+      const adminPhones = getAdminNotificationPhones();
+      if (adminPhones.length > 0) {
+        await Promise.all(
+          adminPhones.map((adminPhone) =>
+            queueSmsNotification({
+              to: adminPhone,
+              message: confirmationMessage,
+              metadata: {
+                bookingId: bookingRef.id,
+                type: "admin-confirmation",
+              },
+            }),
+          ),
+        );
       }
     }
 
@@ -672,7 +683,7 @@ export const createBooking = onRequest({
 
     const displayedTotalCents = baseAmount + tipAmount;
 
-    await queueBookingEmail({
+    const bookingMailId = await queueBookingEmail({
       bookingId: bookingRef.id,
       bookingNumber,
       customerName: passenger.primaryPassenger,
@@ -696,6 +707,23 @@ export const createBooking = onRequest({
 
       flightNumber: schedule.flightNumber ?? null,
     });
+    if (!bookingMailId) {
+      logger.error("Booking confirmation email was not queued", {
+        bookingId: bookingRef.id,
+        bookingNumber,
+      });
+      await queueEmailNotification({
+        to: SUPPORT_EMAIL,
+        subject: `Alert: Booking confirmation email missing (#${formatBookingNumber(bookingNumber)})`,
+        text: [
+          `Booking #${formatBookingNumber(bookingNumber)} (${bookingRef.id}) did not queue a confirmation email.`,
+          `Passenger: ${passenger.primaryPassenger}`,
+          `Email provided: ${passenger.email || "N/A"}`,
+          `Please verify and resend manually.`,
+        ].join("\n"),
+        metadata: { type: "system-alert", reason: "booking-email-missing", suppressWatch: true, bookingId: bookingRef.id },
+      });
+    }
 
     if (quoteRequestMeta) {
       await db

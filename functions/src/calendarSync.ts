@@ -346,29 +346,35 @@ async function syncCalendarForBooking(
   const calendarId = OPS_CAL_ID;
   const existingHash = booking.calendar?.syncedHash ?? null;
 
-  if (status === "cancelled") {
-    if (booking.calendar?.eventId) {
-      try {
-        await calendar.events.delete({
-          calendarId,
-          eventId: booking.calendar.eventId,
-        });
-      } catch (error) {
-        if (!isNotFoundError(error)) {
-          logger.error("calendarSync: failed to delete event", {
-            bookingId,
-            error: error instanceof Error ? error.message : error,
-          });
-        }
-      }
+  if (status === "cancelled" || status === "canceled") {
+    const { event, hash, eventId } = await buildEventPayload(bookingId, booking, calendarId);
+    const cancelledSummary = event.summary.startsWith("CANCELLED")
+      ? event.summary
+      : `CANCELLED – ${event.summary}`;
+    try {
+      await calendar.events.update({
+        calendarId,
+        eventId,
+        requestBody: {
+          ...event,
+          summary: cancelledSummary,
+          colorId: STATUS_COLOR.cancelled,
+        },
+      });
+    } catch (error) {
+      logger.error("calendarSync: failed to mark event cancelled", {
+        bookingId,
+        error: error instanceof Error ? error.message : error,
+      });
     }
+
     await ref.set(
       {
         calendar: {
-          eventId: null,
+          eventId,
           calendarId,
           status: "cancelled",
-          syncedHash: null,
+          syncedHash: hash,
           syncedAt: admin.firestore.FieldValue.serverTimestamp(),
           lastError: null,
         },

@@ -24,6 +24,7 @@ import { useFirebaseServices } from "@/app/providers/FirebaseContext"
 import { PlacesAutocompleteInput } from "@/components/maps/PlacesAutocompleteInput"
 import { apiFetch } from "@/lib/api/rest"
 import { callFunction } from "@/lib/api/client"
+import { saveBookingThankYouState, type BookingThankYouState } from "@/features/booking/utils/thankYouState"
 
 const baseDirections = getAvailableDirections()
 const extraDirections = ["Ferry Terminal", "Cruise Terminal"] as const
@@ -674,6 +675,12 @@ export const BookingWizard = () => {
       preferredRateKey: passengerOptionMeta?.preferredRateKey ?? null,
     }
 
+    if (typeof window !== "undefined") {
+      window.dataLayer?.push?.({ event: "booking_form_step_trip" })
+    }
+    if (typeof window !== "undefined") {
+      window.dataLayer?.push?.({ event: "booking_form_step_trip" })
+    }
     setTripData(payload)
     goToStep(1, { scroll: true })
   })
@@ -697,6 +704,12 @@ export const BookingWizard = () => {
       notes: values.notes,
     }
 
+    if (typeof window !== "undefined") {
+      window.dataLayer?.push?.({ event: "booking_form_step_schedule" })
+    }
+    if (typeof window !== "undefined") {
+      window.dataLayer?.push?.({ event: "booking_form_step_schedule" })
+    }
     setScheduleData(schedule)
     void updateQuoteLog({
       schedule: {
@@ -711,6 +724,12 @@ export const BookingWizard = () => {
   })
 
   const handlePassengerSubmit = passengerForm.handleSubmit((values: PassengerForm) => {
+    if (typeof window !== "undefined") {
+      window.dataLayer?.push?.({ event: "booking_form_step_contact" })
+    }
+    if (typeof window !== "undefined") {
+      window.dataLayer?.push?.({ event: "booking_form_step_contact" })
+    }
     setPassengerData(values)
     setSubmitted(false)
     setSubmissionDetails(null)
@@ -746,6 +765,14 @@ export const BookingWizard = () => {
         "standard"
 
     if (!firebaseEnabled) {
+      const fallbackState: BookingThankYouState = {
+        context: "booking",
+        paymentPreference,
+        paymentLink: null,
+        bookingNumber: null,
+        bookingId: null,
+        total: estimatedTotalForState ?? null,
+      }
       void updateQuoteLog({
         lastStep: 5,
         booking: {
@@ -755,9 +782,11 @@ export const BookingWizard = () => {
           tipAmount: safeTip,
         },
       })
+      saveBookingThankYouState(fallbackState)
       navigate({
         to: "/thank-you",
         state: {
+          context: "booking",
           paymentPreference,
           ...(estimatedTotalForState != null ? { total: estimatedTotalForState } : {}),
         },
@@ -817,7 +846,12 @@ export const BookingWizard = () => {
         },
       })
 
-      let navigateState: Record<string, unknown> | null = null
+      let navigateState:
+        | (Record<string, unknown> & {
+            context: "booking"
+            paymentPreference: "pay_on_arrival" | "pay_now"
+          })
+        | null = null
 
       if (response?.ok) {
         const paymentUrl = response.paymentLink?.url ?? null
@@ -841,15 +875,33 @@ export const BookingWizard = () => {
           totalCents != null ?
             Math.max(0, totalCents - (gstCents ?? 0)) :
             null
+
+        const totalForUi =
+          displayCents != null ?
+            displayCents / 100 :
+            estimatedTotalForState != null ? estimatedTotalForState : null
+
         navigateState = {
+          context: "booking",
           paymentLink: paymentUrl ?? undefined,
           paymentPreference,
           bookingId: response.id ?? undefined,
           bookingNumber: response.bookingNumber ?? undefined,
-          ...(displayCents != null ?
-            { total: displayCents / 100 } :
-            estimatedTotalForState != null ? { total: estimatedTotalForState } : {}),
+          ...(totalForUi != null ? { total: totalForUi } : {}),
         }
+
+        const storedState: BookingThankYouState = {
+          context: "booking",
+          paymentPreference,
+          paymentLink: paymentUrl ?? null,
+          bookingNumber:
+            typeof response.bookingNumber === "number" && Number.isFinite(response.bookingNumber) ?
+              response.bookingNumber :
+              null,
+          bookingId: typeof response.id === "string" ? response.id : null,
+          total: totalForUi,
+        }
+        saveBookingThankYouState(storedState)
       }
       setSubmitted(true)
       if (navigateState) {

@@ -21,6 +21,8 @@ const DISPATCH_PHONE =
   asTrimmedString(functionsConfig?.dispatch?.phone) ??
   "(604) 751-6688";
 const TIME_ZONE = SERVICE_TIME_ZONE;
+const OUTBOUND_HELP_HINT =
+  "\nText OPTIONS for help, STOP to cancel reminders, or AGENT to forward your text to a live agent.";
 
 const POI_LABELS = new Set([
   "Abbotsford International Airport (YXX)",
@@ -148,27 +150,25 @@ export const formatBookingTag = (bookingNumber?: number | null, bookingId?: stri
 
 export const buildConfirmationMessage = (ctx: SmsBookingContext) => {
   const when = formatDateTime(ctx.pickupTimeUtc, scheduleFallback(ctx.schedule ?? undefined));
-  const tag = formatBookingTag(ctx.bookingNumber, ctx.bookingId);
   const from = formatLocation(ctx.trip?.origin ?? null, ctx.trip?.originAddress ?? null);
   const to = formatLocation(ctx.trip?.destination ?? null, ctx.trip?.destinationAddress ?? null);
-  const passengerName = ctx.passengerName?.trim() || "—";
-  const passengerCount = ctx.passengerCount ?? null;
-  const totalPrice = formatCurrency(ctx.totalCents ?? null, ctx.currency ?? "CAD");
-  const notes = ctx.specialNotes?.trim() && ctx.specialNotes.trim().length > 0 ? ctx.specialNotes.trim() : "None";
+  const passengerName = ctx.passengerName?.trim() || "Valley Airporter Passenger";
+  const bookingNumberLabel =
+    typeof ctx.bookingNumber === "number" && Number.isFinite(ctx.bookingNumber)
+      ? `booking #${ctx.bookingNumber.toString().padStart(5, "0")}`
+      : ctx.bookingId
+        ? `booking ${ctx.bookingId.substring(0, 8).toUpperCase()}`
+        : "booking";
 
   const lines = [
-    `${tag} confirmed.`,
-    `Date: ${when}`,
-    `From: ${from}`,
-    `To: ${to}`,
-    `Passenger name: ${passengerName}`,
-    `Total passengers: ${passengerCount ?? "—"}`,
-    `Total price: ${totalPrice}`,
-    `Special notes: ${notes}`,
-    'Need to cancel? Reply "STOP" (standard carrier opt-out).',
+    `New ${bookingNumberLabel} confirmed.`,
+    "Automated Message For:",
+    passengerName,
+    `${from} → ${to}`,
+    when,
   ];
 
-  return lines.join("\n");
+  return `${lines.join("\n")}${OUTBOUND_HELP_HINT}`;
 };
 
 export const buildReminderMessage = (ctx: SmsBookingContext, timing: "24h" | "10h") => {
@@ -185,14 +185,12 @@ export const buildReminderMessage = (ctx: SmsBookingContext, timing: "24h" | "10
     return `${tag} reminder: pickup is tomorrow ${when}.
 Pickup: ${from}
 Drop-off: ${to}
-${locationLine}
-Need to cancel? Reply "STOP".`;
+${locationLine}${OUTBOUND_HELP_HINT}`;
   }
   return `${tag} reminder: pickup today at ${when}.
 Pickup: ${from}
 Drop-off: ${to}
-${locationLine}
-Need help? Reply HELP or call ${DISPATCH_PHONE}. Reply STOP to cancel.`;
+${locationLine}${OUTBOUND_HELP_HINT}`;
 };
 
 export const buildCancellationPassengerMessage = (ctx: SmsBookingContext) => {
@@ -202,7 +200,7 @@ export const buildCancellationPassengerMessage = (ctx: SmsBookingContext) => {
   return `${tag} has been canceled.
 Date: ${when}
 Route: ${route}
-No further reminders will be sent. Need to rebook? valleyairporter.ca.`;
+No further reminders will be sent. Need to rebook? valleyairporter.ca.${OUTBOUND_HELP_HINT}`;
 };
 
 export const buildCancellationAdminMessage = (ctx: SmsBookingContext & { passengerPhone?: string | null }) => {

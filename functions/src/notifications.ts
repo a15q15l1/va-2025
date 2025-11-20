@@ -14,6 +14,7 @@ interface EmailNotificationPayload {
   html?: string;
   replyTo?: string | string[] | null;
   from?: string | null;
+  metadata?: Record<string, unknown> | null;
 }
 
 export const queueEmailNotification = async ({
@@ -23,6 +24,7 @@ export const queueEmailNotification = async ({
   html,
   replyTo,
   from,
+  metadata,
 }: EmailNotificationPayload) => {
   const recipients = Array.isArray(to) ? to.filter(Boolean) : [to].filter(Boolean);
   if (recipients.length === 0) return null;
@@ -60,6 +62,9 @@ export const queueEmailNotification = async ({
     createdAt: admin.firestore.FieldValue.serverTimestamp(),
     createdOn: admin.firestore.FieldValue.serverTimestamp(),
   };
+  if (metadata && Object.keys(metadata).length > 0) {
+    payload.metadata = metadata;
+  }
 
   const defaultFrom = from ?? process.env.DEFAULT_FROM_EMAIL ?? "info@valleyairporter.ca";
   if (defaultFrom) {
